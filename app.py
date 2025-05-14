@@ -4,9 +4,9 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🛠️ Drilling Operations Dashboard (Filtered + Decision Logic)")
+st.title("🛠️ Drilling Dashboard with Operational Diagnostics")
 
-st.sidebar.header("Upload Sensor CSV")
+st.sidebar.header("Upload Drilling Data")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
@@ -26,54 +26,66 @@ if uploaded_file:
         df.set_index('Timestamp', inplace=True)
         df.drop(columns=['YYYY/MM/DD', 'HH:MM:SS'], inplace=True)
 
-        st.success("File successfully loaded.")
-        st.subheader("🔍 Preview")
-        st.dataframe(df.head())
+        st.success("Data loaded.")
+        tab1, tab2 = st.tabs(["📈 Data Overview", "🔎 Operational Diagnostics"])
 
-        st.sidebar.markdown("---")
-        st.sidebar.header("📊 Filters")
+        with tab1:
+            st.markdown("### Full Dataset Preview")
+            st.dataframe(df.head(20))
 
-        # Filters (using synthetic logic)
-        min_rop = st.sidebar.slider("Min ROP (ft/hr)", 0, 100, 5)
-        max_vibration = st.sidebar.slider("Max Vibe Lateral (g)", 0, 50, 25)
-        min_hook_load = st.sidebar.slider("Min Hook Load (klbs)", 0, 150, 30)
+            st.markdown("### Basic ROP & Vibration Trends")
+            fig = px.line(df.reset_index(), x='Timestamp', y=['Rate Of Penetration (ft_per_hr)', 'DAS Vibe Lateral Max (g_force)'])
+            st.plotly_chart(fig, use_container_width=True)
 
-        df_filtered = df[
-            (df['Rate Of Penetration (ft_per_hr)'] >= min_rop) &
-            (df['DAS Vibe Lateral Max (g_force)'] <= max_vibration) &
-            (df['Hook Load (klbs)'] >= min_hook_load)
-        ]
+        with tab2:
+            st.markdown("### 🔧 Diagnostics & Optimization")
 
-        st.markdown(f"### Filtered Data ({len(df_filtered)} rows)")
-        st.dataframe(df_filtered.head(20))
+            mode = st.selectbox("Optimization Target", [
+                "Screen Optimization",
+                "Shaker Performance",
+                "Utilization",
+                "Generic Issue Prediction"
+            ])
 
-        st.markdown("### 🔬 Decision Scoring Engine")
+            if mode == "Screen Optimization":
+                st.info("Calculating screen optimization based on ROP vs. vibration...")
+                df['Screen Load Estimate (%)'] = (df['Rate Of Penetration (ft_per_hr)'] * 2).clip(0, 100)
+                st.line_chart(df['Screen Load Estimate (%)'])
 
-        def compute_status(row):
-            score = 0
-            if abs(row['Rate Of Penetration (ft_per_hr)'] - row['PLC ROP (ft_per_hr)']) > 15:
-                score += 1
-            if row['DAS Vibe Lateral Max (g_force)'] > 25:
-                score += 1
-            if row['AutoDriller Limiting (unitless)'] > 0:
-                score += 1
-            if row['DAS Vibe WOB Reduce (percent)'] > 0 or row['DAS Vibe RPM Reduce (percent)'] > 0:
-                score += 1
+            elif mode == "Shaker Performance":
+                st.info("Estimating shaker performance as inverse of vibration intensity...")
+                df['Shaker Performance (%)'] = (100 - df['DAS Vibe Lateral Max (g_force)'] * 3).clip(0, 100)
+                st.line_chart(df['Shaker Performance (%)'])
 
-            if score >= 3:
-                return 'Overload Risk'
-            elif score == 2:
-                return 'Monitor'
-            else:
-                return 'Stable'
+            elif mode == "Utilization":
+                st.info("Utilization defined from Hook Load & Pump Status...")
+                df['Utilization (%)'] = (
+                    (df['Hook Load (klbs)'] / df['Hook Load (klbs)'].max()) * 
+                    ((df['Pump 1 strokes/min (SPM)'] + df['Pump 2 strokes/min (SPM)']) / 100)
+                ).clip(0, 1) * 100
+                st.line_chart(df['Utilization (%)'])
 
-        df_filtered['Status'] = df_filtered.apply(compute_status, axis=1)
-        st.dataframe(df_filtered[['Rate Of Penetration (ft_per_hr)', 'PLC ROP (ft_per_hr)',
-                                  'DAS Vibe Lateral Max (g_force)', 'AutoDriller Limiting (unitless)',
-                                  'Status']].tail(20))
+            elif mode == "Generic Issue Prediction":
+                issue_type = st.selectbox("Select Issue Type", [
+                    "Washout %",
+                    "Downhole Issue",
+                    "Sidetrack Issue"
+                ])
 
-        st.markdown("### 📈 Status Over Time")
-        fig = px.scatter(df_filtered.reset_index(), x='Timestamp', y='Status', color='Status')
-        st.plotly_chart(fig)
+                if issue_type == "Washout %":
+                    st.warning("Washout risk flagged where ROP > 60 and Vibration < 10")
+                    df['Washout Risk (%)'] = ((df['Rate Of Penetration (ft_per_hr)'] > 60) & (df['DAS Vibe Lateral Max (g_force)'] < 10)).astype(int) * 100
+                    st.line_chart(df['Washout Risk (%)'])
 
-        st.sidebar.download_button("Download Filtered CSV", df_filtered.to_csv().encode(), "filtered_output.csv")
+                elif issue_type == "Downhole Issue":
+                    st.warning("Flagged if Hook Load > 100 and ROP < 5")
+                    df['Downhole Risk'] = ((df['Hook Load (klbs)'] > 100) & (df['Rate Of Penetration (ft_per_hr)'] < 5)).astype(int)
+                    st.line_chart(df['Downhole Risk'])
+
+                elif issue_type == "Sidetrack Issue":
+                    st.warning("Flagged if ROP erratic with spikes over time")
+                    df['ROP Change'] = df['Rate Of Penetration (ft_per_hr)'].diff().abs()
+                    df['Sidetrack Risk'] = (df['ROP Change'] > 30).astype(int)
+                    st.line_chart(df['Sidetrack Risk'])
+
+        st.sidebar.download_button("Download Processed CSV", df.to_csv().encode(), "processed_with_diagnostics.csv")
